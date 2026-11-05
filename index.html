@@ -278,7 +278,12 @@ $('connect').onclick = async () => {
     if (!pk) throw new Error('provider connected but returned no public key');
     setConnected(pk, name);
     log(`connected via ${name}: ${pk.toBase58()}`);
-    status('ok', `Connected as <span class="addr">${pk.toBase58()}</span>. Now press <strong>Scan</strong>.`);
+    // Do not clobber an existing scan summary: the badge above already confirms
+    // the connection and the sign buttons have just re-rendered. Only prompt to
+    // scan when there is nothing on screen yet.
+    if (!lastList) {
+      status('ok', `Connected as <span class="addr">${pk.toBase58()}</span>. Now press <strong>Scan</strong>.`);
+    }
   } catch (e) {
     provider = null;
     log('connect rejected: ' + e.message);
