@@ -176,6 +176,9 @@ $('testRpc').onclick = async () => {
 
 // ------------------------------------------------------------------ wallet
 let provider = null, providerName = '', owner = null;
+// Last scan result + the address it was for, so a connection change can
+// re-render in place instead of leaving stale disabled buttons behind.
+let lastList = null, lastInspect = '';
 
 function detectProviders() {
   const out = [];
@@ -187,7 +190,69 @@ function detectProviders() {
   return out;
 }
 
+// Every piece of UI that depends on connection state is recomputed from here.
+// The previous version only set these inside the click handler, so connecting
+// after a scan left the cards rendering with canSign=false forever.
+function setConnected(pk, name) {
+  owner = pk || null;
+  if (name) providerName = name;
+  $('who').innerHTML = owner
+    ? `<span class="pill ok">${providerName || 'wallet'}</span>
+       <span class="addr">${owner.toBase58()}</span>`
+    : '';
+  const btn = $('connect');
+  btn.textContent = owner ? 'Disconnect' : 'Connect wallet';
+  btn.classList.toggle('primary', !owner);
+  // Prefill the inspect box only if it is empty or still holds the previous
+  // wallet's address — never clobber an address the user typed themselves.
+  const cur = $('inspect').value.trim();
+  if (owner && (!cur || cur === lastInspect)) $('inspect').value = owner.toBase58();
+  lastInspect = owner ? owner.toBase58() : lastInspect;
+  refreshResults();
+}
+
+function setDisconnected() {
+  owner = null; provider = null; providerName = '';
+  setConnected(null);
+}
+
+// Re-render the previous scan in place so the sign buttons re-evaluate.
+function refreshResults() { if (lastList) render(lastList); }
+
+function attachProviderEvents(p, name) {
+  if (typeof p?.on !== 'function') return;
+  try {
+    p.on('connect', (pk) => { log(`${name}: connect event`); setConnected(pk || p.publicKey, name); });
+    p.on('disconnect', () => { log(`${name}: disconnect event`); setDisconnected(); });
+    p.on('accountChanged', (pk) => {
+      log(`${name}: accountChanged event`);
+      pk ? setConnected(pk, name) : setDisconnected();
+    });
+  } catch (e) { log('could not attach wallet events: ' + e.message); }
+}
+
+// Phantom's in-app browser is usually ALREADY connected at page load. Adopt
+// that session instead of waiting for a button press that never comes.
+function adoptExisting() {
+  for (const [name, p] of detectProviders()) {
+    if (p.isConnected && p.publicKey) {
+      provider = p;
+      attachProviderEvents(p, name);
+      setConnected(p.publicKey, name);
+      log(`adopted existing ${name} session: ${p.publicKey.toBase58()}`);
+      return true;
+    }
+  }
+  return false;
+}
+
 $('connect').onclick = async () => {
+  if (owner && provider) {
+    try { if (provider.disconnect) await provider.disconnect(); } catch (e) { log('disconnect error: ' + e.message); }
+    setDisconnected();
+    log('disconnected');
+    return;
+  }
   const found = detectProviders();
   if (!found.length) {
     status('bad', 'No Solana wallet detected. On mobile, open this page <strong>inside</strong> ' +
@@ -203,15 +268,22 @@ $('connect').onclick = async () => {
     const i = parseInt(n, 10) - 1;
     if (i >= 0 && i < found.length) pick = found[i];
   }
-  [providerName, provider] = pick;
+  const [name, p] = pick;
+  provider = p; providerName = name;
+  attachProviderEvents(p, name);
   try {
-    const res = await provider.connect();
-    owner = res.publicKey || provider.publicKey;
-    $('who').innerHTML = `<span class="pill ok">${providerName}</span>
-      <span class="addr">${owner.toBase58()}</span>`;
-    $('inspect').value = owner.toBase58();
-    log(`connected via ${providerName}: ${owner.toBase58()}`);
-  } catch (e) { log('connect rejected: ' + e.message); }
+    const res = await p.connect();
+    // Some providers resolve with the key, others only expose it afterwards.
+    const pk = res?.publicKey || p.publicKey;
+    if (!pk) throw new Error('provider connected but returned no public key');
+    setConnected(pk, name);
+    log(`connected via ${name}: ${pk.toBase58()}`);
+    status('ok', `Connected as <span class="addr">${pk.toBase58()}</span>. Now press <strong>Scan</strong>.`);
+  } catch (e) {
+    provider = null;
+    log('connect rejected: ' + e.message);
+    status('bad', 'Wallet connection rejected or failed: ' + e.message);
+  }
 };
 
 // -------------------------------------------------------------------- scan
@@ -235,6 +307,7 @@ $('scan').onclick = async () => {
       a.baseSym  = syms[a.baseMintB58]  || short(a.baseMintB58);
       a.quoteSym = syms[a.quoteMintB58] || short(a.quoteMintB58);
     });
+    lastList = list;
     render(list);
 
     const ok = list.filter(x => x.ok);
@@ -254,6 +327,7 @@ $('scan').onclick = async () => {
       ? `<code>getProgramAccounts</code> was refused by this RPC:<br><span class="mono">${e.message}</span><br>
          Free public endpoints block indexed requests — enter an RPC that allows it in step&nbsp;1.`
       : 'Scan failed: ' + e.message);
+    lastList = null;
     $('results').innerHTML = '';
   }
 };
@@ -261,6 +335,11 @@ $('scan').onclick = async () => {
 // ------------------------------------------------------------------ render
 function render(list) {
   const host = $('results');
+  // Remember which instruction previews were open, so re-rendering after a
+  // connection change does not silently collapse them.
+  const openPrev = [...host.querySelectorAll('[id^="prev-"]')]
+    .filter(b => b.innerHTML.trim()).map(b => b.dataset ? b.id.replace('prev-', '') : null)
+    .filter(Boolean);
   if (!list.length) {
     host.innerHTML = '<div class="panel small">No Serum v3 open-orders accounts found for this address.</div>';
     return;
@@ -278,7 +357,14 @@ function render(list) {
     const pill = a.blocked ? '<span class="pill bad">resting orders</span>'
       : a.nothing ? '<span class="pill warn">nothing to withdraw</span>'
                  : '<span class="pill ok">ready</span>';
-    const canSign = !!(provider && owner && owner.equals(a.owner) && !a.blocked && !a.nothing);
+    const owned = !!(owner && owner.equals(a.owner));
+    const canSign = !!(provider && owned && !a.blocked && !a.nothing && !a.done);
+    const actLabel = a.done ? 'Done ✓'
+      : a.blocked ? 'Cancel orders first'
+      : a.nothing ? 'Nothing to withdraw'
+      : canSign ? 'Settle &amp; close'
+      : owner ? 'Connected wallet is not the owner'
+              : 'Connect owner wallet to sign';
     card.innerHTML = `
       <div class="row" style="justify-content:space-between">
         <strong>#${idx + 1} &nbsp;${a.baseSym}/${a.quoteSym}</strong>${pill}
@@ -297,9 +383,7 @@ function render(list) {
         <dt>resting orders</dt><dd>${a.resting} / 128 slots</dd>
       </dl>
       <div class="row">
-        <button class="act primary" data-i="${idx}" ${canSign ? '' : 'disabled'}>
-          ${a.blocked ? 'Cancel orders first' : a.nothing ? 'Nothing to withdraw'
-            : canSign ? 'Settle &amp; close' : 'Connect owner wallet to sign'}</button>
+        <button class="act primary" data-i="${idx}" ${canSign ? '' : 'disabled'}>${actLabel}</button>
         <button class="prev" data-i="${idx}">Preview instruction</button>
       </div>
       <div id="prev-${idx}"></div>`;
@@ -308,6 +392,12 @@ function render(list) {
 
   host.querySelectorAll('.prev').forEach(b => b.onclick = () => preview(list[+b.dataset.i], +b.dataset.i));
   host.querySelectorAll('.act').forEach(b => b.onclick = () => act(list[+b.dataset.i], b));
+  // restore previews that were open before this re-render
+  openPrev.forEach(i => {
+    const btn = host.querySelector(`.prev[data-i="${i}"]`);
+    const box = $('prev-' + i);
+    if (btn && box && !box.innerHTML.trim()) btn.click();
+  });
 }
 
 function preview(a, idx) {
@@ -374,6 +464,7 @@ async function act(a, btn) {
     status('ok', `Confirmed.<br><span class="addr">${sig}</span>` +
       (bal ? `<br>${a.quoteSym} wallet now holds <strong>${bal.value.uiAmountString}</strong>.` : '') +
       (sol !== null ? `<br>SOL balance <strong>${(sol / 1e9).toFixed(9)}</strong>.` : ''));
+    a.done = true;      // survives a later re-render triggered by a wallet event
     btn.textContent = 'Done ✓';
   } catch (e) {
     log('error: ' + e.message);
@@ -384,10 +475,21 @@ async function act(a, btn) {
 }
 
 // ------------------------------------------------------------------- boot
-const p = detectProviders();
-log(p.length ? 'wallet provider(s) available: ' + p.map(x => x[0]).join(', ')
-             : 'no wallet provider detected — open this page inside your wallet app to sign');
 log('set your RPC in step 1, then connect or inspect an address');
+
+// Wallets inject their provider asynchronously — frequently after this module
+// has already evaluated. Retry briefly rather than concluding there is none.
+function bootWallet(tries = 12) {
+  const found = detectProviders();
+  if (found.length) {
+    log('wallet provider(s) available: ' + found.map(x => x[0]).join(', '));
+    if (!owner) adoptExisting();
+    return;
+  }
+  if (tries > 0) { setTimeout(() => bootWallet(tries - 1), 250); return; }
+  log('no wallet provider detected — open this page inside your wallet app to sign');
+}
+bootWallet();
 </script>
 </body>
 </html>
