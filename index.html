@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Serum v3 Open-Orders Recovery</title>
+<meta name="description" content="Find and withdraw unsettled funds and stranded rent from Serum v3 open-orders accounts. Runs entirely in your browser; your key never leaves your wallet.">
+<style>
+  :root{
+    --bg:#0d1117;--panel:#161b22;--panel2:#1c2330;--border:#30363d;
+    --fg:#e6edf3;--dim:#8b949e;--ok:#3fb950;--warn:#d29922;--bad:#f85149;
+    --accent:#58a6ff;--mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-text-size-adjust:100%}
+  .wrap{max-width:920px;margin:0 auto;padding:20px 16px 80px}
+  h1{font-size:22px;margin:0 0 4px;letter-spacing:-.2px}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);
+    margin:30px 0 10px;font-weight:600}
+  .sub{color:var(--dim);font-size:13.5px;margin:0 0 18px}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .grow{flex:1 1 220px;min-width:0}
+  input{width:100%;background:var(--panel2);border:1px solid var(--border);color:var(--fg);
+    border-radius:8px;padding:10px 11px;font:14px var(--mono);outline:none}
+  input:focus{border-color:var(--accent)}
+  button{background:var(--panel2);border:1px solid var(--border);color:var(--fg);border-radius:8px;
+    padding:10px 15px;font:14px/1 inherit;font-weight:600;cursor:pointer;white-space:nowrap}
+  button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  button.primary{background:#1f6feb;border-color:#1f6feb;color:#fff}
+  button.primary:hover:not(:disabled){background:#388bfd;color:#fff}
+  .mono,.addr{font-family:var(--mono)}
+  .addr{font-size:12px;word-break:break-all}
+  .small{font-size:12.5px;color:var(--dim)}
+  .pill{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11.5px;font-weight:700;
+    letter-spacing:.03em;border:1px solid}
+  .pill.ok{color:var(--ok);border-color:#1f6f33;background:#0f2417}
+  .pill.warn{color:var(--warn);border-color:#6e5314;background:#241d0b}
+  .pill.bad{color:var(--bad);border-color:#8b2b26;background:#2a1211}
+  .banner{border-radius:10px;padding:12px 14px;margin:14px 0;font-size:13.5px;border:1px solid}
+  .banner.warn{background:#241d0b;border-color:#6e5314;color:#f0d68a}
+  .banner.bad{background:#2a1211;border-color:#8b2b26;color:#ffb4ae}
+  .banner.ok{background:#0f2417;border-color:#1f6f33;color:#9be0a8}
+  .banner.info{background:#0d1f33;border-color:#1f4a7a;color:#a9cdf5}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.06em;font-weight:600}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:12px}
+  .kv{display:grid;grid-template-columns:minmax(112px,auto) 1fr;gap:3px 12px;font-size:13px;margin:10px 0}
+  .kv dt{color:var(--dim)}
+  .kv dd{margin:0;font-family:var(--mono);word-break:break-all;font-size:12px}
+  pre#log{background:#0a0d12;border:1px solid var(--border);border-radius:8px;padding:11px;
+    font:11.5px/1.5 var(--mono);color:var(--dim);white-space:pre-wrap;word-break:break-all;
+    max-height:300px;overflow:auto;margin:0}
+  .foot{margin-top:34px;padding-top:16px;border-top:1px solid var(--border);font-size:12.5px;color:var(--dim)}
+  code{background:var(--panel2);padding:1px 5px;border-radius:4px;font-family:var(--mono);font-size:12.5px}
+  hr{border:0;border-top:1px solid var(--border);margin:12px 0}
+  .spin{display:inline-block;width:12px;height:12px;border:2px solid var(--dim);
+    border-top-color:transparent;border-radius:50%;animation:s .7s linear infinite;vertical-align:-1px}
+  @keyframes s{to{transform:rotate(360deg)}}
+  @media(max-width:560px){.kv{grid-template-columns:1fr}.kv dd{margin-bottom:4px}h1{font-size:19px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Serum v3 Open-Orders Recovery</h1>
+  <p class="sub">Withdraw unsettled balances and stranded rent left behind in Serum v3 open-orders
+  accounts. Runs entirely in your browser — your private key never leaves your wallet and this page
+  never sees it.</p>
+
+  <div class="banner warn">
+    <strong>Read before use.</strong> This signs real mainnet transactions. It builds exactly two
+    Serum instructions — <code>settleFunds</code> and <code>closeOpenOrders</code> — and lists every
+    account in them before you sign. Check that list in your wallet&rsquo;s preview too. Each
+    transaction is simulated before you are prompted, and broadcast with preflight enabled so a
+    failing transaction is rejected rather than landed.
+  </div>
+
+  <h2>1 · RPC endpoint</h2>
+  <div class="panel">
+    <div class="row">
+      <div class="grow"><input id="rpc" spellcheck="false" autocomplete="off"
+        placeholder="https://api.mainnet-beta.solana.com"></div>
+      <button id="testRpc">Test</button>
+    </div>
+    <p class="small" style="margin:10px 0 0">
+      Stored only in this browser&rsquo;s localStorage; never sent anywhere except the endpoint
+      itself. The scan uses <code>getProgramAccounts</code>, which free public endpoints refuse
+      (<code>403 Indexed requests require a personal token</code>). Use Helius, Triton, QuickNode,
+      or your own node.
+    </p>
+  </div>
+
+  <h2>2 · Wallet</h2>
+  <div class="panel">
+    <div class="row">
+      <button id="connect" class="primary">Connect wallet</button>
+      <span id="who" class="small"></span>
+    </div>
+    <div style="margin-top:12px">
+      <div class="row">
+        <div class="grow"><input id="inspect" spellcheck="false" autocomplete="off"
+          placeholder="…or paste any address to inspect read-only"></div>
+        <button id="scan">Scan</button>
+      </div>
+      <p class="small" style="margin:9px 0 0">
+        Inspect mode analyses an address without connecting, so you can audit any wallet. Signing
+        stays disabled unless the connected wallet owns the account.
+      </p>
+    </div>
+  </div>
+
+  <div id="status"></div>
+
+  <h2>3 · Open-orders accounts</h2>
+  <div id="results"><p class="small">No scan yet.</p></div>
+
+  <h2>Log</h2>
+  <pre id="log">ready.</pre>
+
+  <div class="foot">
+    <p>Serum v3 program <span class="addr">9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin</span>.
+    The program is immutable and was never upgraded, so <code>settleFunds</code> still works after
+    the 2022 shutdown.</p>
+    <p>Offsets come from <code>serum-dex/dex/src/state.rs</code>:
+    <code>ACCOUNT_HEAD_PADDING = b"serum"</code> (5 bytes) and
+    <code>ACCOUNT_TAIL_PADDING = b"padding"</code> (7 bytes) → <code>5 + 3216 + 7 = 3228</code>,
+    with <code>market</code> at 13 and <code>owner</code> at 45.
+    <code>free_slot_bits</code> is a <strong>u128</strong> at offset 109 — reading it as u64
+    silently reports 64 free slots instead of 128. The vault signer is
+    <code>create_program_address([market, u64_le(nonce)])</code> using the nonce <em>stored in the
+    market</em>, <strong>not</strong> a canonical bump PDA.</p>
+    <p>Static page, single vendored bundle, no backend, no CDN, no analytics, no build step at
+    runtime. Source, tests and self-hosting instructions are in the repository README.</p>
+  </div>
+</div>
+
+<script type="module">
+import {
+  Connection, PublicKey, VersionedTransaction,
+  scanOpenOrders, buildInstructions, buildTransaction, fetchSymbols, short,
+} from './vendor/app-core.js';
+
+const $ = (id) => document.getElementById(id);
+const logEl = $('log');
+
+function log(msg) {
+  logEl.textContent += `\n[${new Date().toLocaleTimeString()}] ${msg}`;
+  logEl.scrollTop = logEl.scrollHeight;
+}
+function status(kind, html) {
+  $('status').innerHTML = html ? `<div class="banner ${kind}">${html}</div>` : '';
+}
+const fmt = (raw, dec) =>
+  (Number(raw) / 10 ** dec).toLocaleString(undefined, { maximumFractionDigits: dec });
+
+// --------------------------------------------------------------------- rpc
+let conn = null, rpcUrl = '';
+function rpc() {
+  const url = $('rpc').value.trim() || 'https://api.mainnet-beta.solana.com';
+  localStorage.setItem('serum-recover-rpc', url);
+  if (!conn || url !== rpcUrl) { rpcUrl = url; conn = new Connection(url, 'confirmed'); }
+  return conn;
+}
+$('rpc').value = localStorage.getItem('serum-recover-rpc') || 'https://api.mainnet-beta.solana.com';
+
+$('testRpc').onclick = async () => {
+  try { log('RPC ok — slot ' + await rpc().getSlot()); }
+  catch (e) { log('RPC failed: ' + e.message); status('bad', 'RPC unreachable: ' + e.message); }
+};
+
+// ------------------------------------------------------------------ wallet
+let provider = null, providerName = '', owner = null;
+
+function detectProviders() {
+  const out = [];
+  if (window.phantom?.solana) out.push(['Phantom', window.phantom.solana]);
+  if (window.backpack)        out.push(['Backpack', window.backpack]);
+  if (window.solflare)        out.push(['Solflare', window.solflare]);
+  if (window.coin98?.solana)  out.push(['Coin98', window.coin98.solana]);
+  if (window.solana && !out.length) out.push(['Injected', window.solana]);
+  return out;
+}
+
+$('connect').onclick = async () => {
+  const found = detectProviders();
+  if (!found.length) {
+    status('bad', 'No Solana wallet detected. On mobile, open this page <strong>inside</strong> ' +
+      'Phantom / Backpack / Solflare (the wallet app&rsquo;s own browser). On desktop, install the ' +
+      'extension and reload.');
+    log('no wallet provider detected');
+    return;
+  }
+  let pick = found[0];
+  if (found.length > 1) {
+    const n = prompt('Connect with:\n\n' + found.map((f, i) => `${i + 1}. ${f[0]}`).join('\n') +
+      '\n\nEnter a number:');
+    const i = parseInt(n, 10) - 1;
+    if (i >= 0 && i < found.length) pick = found[i];
+  }
+  [providerName, provider] = pick;
+  try {
+    const res = await provider.connect();
+    owner = res.publicKey || provider.publicKey;
+    $('who').innerHTML = `<span class="pill ok">${providerName}</span>
+      <span class="addr">${owner.toBase58()}</span>`;
+    $('inspect').value = owner.toBase58();
+    log(`connected via ${providerName}: ${owner.toBase58()}`);
+  } catch (e) { log('connect rejected: ' + e.message); }
+};
+
+// -------------------------------------------------------------------- scan
+$('scan').onclick = async () => {
+  const raw = ($('inspect').value || owner?.toBase58() || '').trim();
+  if (!raw) { status('bad', 'Connect a wallet or paste an address first.'); return; }
+  let pk;
+  try { pk = new PublicKey(raw); }
+  catch { status('bad', 'Not a valid base58 address.'); return; }
+
+  $('results').innerHTML = '<p class="small"><span class="spin"></span> scanning…</p>';
+  status('info', 'Scanning. <code>getProgramAccounts</code> over the whole Serum program can take ' +
+    'a few seconds.');
+  try {
+    const c = rpc();
+    const list = await scanOpenOrders(c, pk, log);
+    const mints = [...new Set(list.flatMap(a => a.ok ? [a.baseMintB58, a.quoteMintB58] : []))];
+    const syms = await fetchSymbols(rpcUrl, mints);
+    list.forEach(a => {
+      if (!a.ok) return;
+      a.baseSym  = syms[a.baseMintB58]  || short(a.baseMintB58);
+      a.quoteSym = syms[a.quoteMintB58] || short(a.quoteMintB58);
+    });
+    render(list);
+
+    const ok = list.filter(x => x.ok);
+    const ready = ok.filter(x => !x.blocked && !x.nothing);
+    const quote = ready.reduce((s, x) => s + x.quoteFree + x.rebates, 0n);
+    const rent = ready.reduce((s, x) => s + x.rent, 0n);
+    status(ready.length ? 'ok' : 'info',
+      `${list.length} account(s) found · ${ok.length} settleable · ${ready.length} ready to withdraw.` +
+      (quote > 0n || rent > 0n
+        ? `<br>Recoverable: <strong>${quote.toString()}</strong> raw quote units +
+           <strong>${(Number(rent) / 1e9).toFixed(9)} SOL</strong> rent.`
+        : '<br>Nothing to withdraw.'));
+    log(`scan complete: ${list.length} accounts, ${ready.length} ready`);
+  } catch (e) {
+    log('scan failed: ' + e.message);
+    status('bad', /getProgramAccounts|Indexed|410|403/i.test(e.message)
+      ? `<code>getProgramAccounts</code> was refused by this RPC:<br><span class="mono">${e.message}</span><br>
+         Free public endpoints block indexed requests — enter an RPC that allows it in step&nbsp;1.`
+      : 'Scan failed: ' + e.message);
+    $('results').innerHTML = '';
+  }
+};
+
+// ------------------------------------------------------------------ render
+function render(list) {
+  const host = $('results');
+  if (!list.length) {
+    host.innerHTML = '<div class="panel small">No Serum v3 open-orders accounts found for this address.</div>';
+    return;
+  }
+  host.innerHTML = '';
+  list.forEach((a, idx) => {
+    const card = document.createElement('div');
+    card.className = 'card';
+    if (!a.ok) {
+      card.innerHTML = `<div class="row"><span class="pill bad">cannot settle</span></div>
+        <p class="small" style="margin:8px 0 0">${a.reason}</p>`;
+      host.appendChild(card);
+      return;
+    }
+    const pill = a.blocked ? '<span class="pill bad">resting orders</span>'
+      : a.nothing ? '<span class="pill warn">nothing to withdraw</span>'
+                 : '<span class="pill ok">ready</span>';
+    const canSign = !!(provider && owner && owner.equals(a.owner) && !a.blocked && !a.nothing);
+    card.innerHTML = `
+      <div class="row" style="justify-content:space-between">
+        <strong>#${idx + 1} &nbsp;${a.baseSym}/${a.quoteSym}</strong>${pill}
+      </div>
+      <dl class="kv">
+        <dt>open orders</dt><dd>${a.ooKey.toBase58()}</dd>
+        <dt>market</dt><dd>${a.marketPk.toBase58()}</dd>
+        <dt>vault signer</dt><dd>${a.vaultSigner.toBase58()} <span class="small">(nonce ${a.nonce})</span></dd>
+        <dt>base wallet</dt><dd>${a.baseWallet.toBase58()}</dd>
+        <dt>quote wallet</dt><dd>${a.quoteWallet.toBase58()}</dd>
+        <dt>base free/total</dt><dd>${a.baseFree} / ${a.baseTotal} ${a.baseSym}</dd>
+        <dt>quote free/total</dt><dd>${a.quoteFree} / ${a.quoteTotal}
+            = <strong>${fmt(a.quoteFree, a.quoteDec ?? 6)} ${a.quoteSym}</strong></dd>
+        <dt>referrer rebates</dt><dd>${a.rebates} = ${fmt(a.rebates, a.quoteDec ?? 6)} ${a.quoteSym}</dd>
+        <dt>rent recoverable</dt><dd>${a.rent} lamports = ${(Number(a.rent) / 1e9).toFixed(9)} SOL</dd>
+        <dt>resting orders</dt><dd>${a.resting} / 128 slots</dd>
+      </dl>
+      <div class="row">
+        <button class="act primary" data-i="${idx}" ${canSign ? '' : 'disabled'}>
+          ${a.blocked ? 'Cancel orders first' : a.nothing ? 'Nothing to withdraw'
+            : canSign ? 'Settle &amp; close' : 'Connect owner wallet to sign'}</button>
+        <button class="prev" data-i="${idx}">Preview instruction</button>
+      </div>
+      <div id="prev-${idx}"></div>`;
+    host.appendChild(card);
+  });
+
+  host.querySelectorAll('.prev').forEach(b => b.onclick = () => preview(list[+b.dataset.i], +b.dataset.i));
+  host.querySelectorAll('.act').forEach(b => b.onclick = () => act(list[+b.dataset.i], b));
+}
+
+function preview(a, idx) {
+  const box = $('prev-' + idx);
+  if (box.innerHTML) { box.innerHTML = ''; return; }
+  const { ixs } = buildInstructions(a);
+  box.innerHTML = '<div class="panel" style="margin-top:12px">' + ixs.map(ix => `
+    <p class="small" style="margin:0 0 4px"><strong>${ix.name}</strong>
+      &nbsp;data <span class="mono">${[...ix.data].join(' ')}</span>
+      &nbsp;program <span class="mono">${ix.programId.toBase58()}</span></p>
+    <table><thead><tr><th>#</th><th>account</th><th>signer</th><th>writable</th></tr></thead><tbody>
+    ${ix.keys.map((k, n) => `<tr><td>${n}</td><td class="addr">${k.pubkey.toBase58()}</td>
+      <td>${k.isSigner ? 'yes' : '—'}</td><td>${k.isWritable ? 'yes' : '—'}</td></tr>`).join('')}
+    </tbody></table>`).join('<hr>') + '</div>';
+}
+
+// --------------------------------------------------------------- sign+send
+async function act(a, btn) {
+  if (!provider || !owner) { status('bad', 'Connect your wallet first (step 2).'); return; }
+  if (!owner.equals(a.owner)) {
+    status('bad', `Connected wallet <span class="addr">${owner.toBase58()}</span> does not own this
+      account (<span class="addr">${a.owner.toBase58()}</span>).`);
+    return;
+  }
+  if (a.blocked) { status('bad', 'This account has resting orders. Cancel them before settling.'); return; }
+
+  btn.disabled = true;
+  const c = rpc();
+  try {
+    const { blockhash, lastValidBlockHeight } = await c.getLatestBlockhash('confirmed');
+    const tx = buildTransaction(a, owner, blockhash);
+
+    // Simulate UNSIGNED first so a doomed transaction never triggers a wallet prompt.
+    log('pre-flight simulation (unsigned, sigVerify: false)…');
+    const pre = await c.simulateTransaction(new VersionedTransaction(tx.compileMessage()),
+      { sigVerify: false, replaceRecentBlockhash: true });
+    if (pre.value.err) {
+      log('simulation FAILED — not prompting wallet: ' + JSON.stringify(pre.value.err));
+      (pre.value.logs || []).slice(-12).forEach(l => log('  | ' + l));
+      status('bad', 'Simulation failed, so nothing was signed or broadcast. See the log.');
+      btn.disabled = false;
+      return;
+    }
+    log(`simulation ok (${pre.value.unitsConsumed} CU). requesting signature…`);
+
+    const signed = await provider.signTransaction(tx);
+    log('signed. broadcasting with preflight enabled…');
+
+    // skipPreflight:false => the RPC re-simulates the SIGNED transaction and
+    // refuses to broadcast if it would fail.
+    const sig = await c.sendRawTransaction(signed.serialize(), { skipPreflight: false, maxRetries: 3 });
+    log('signature ' + sig);
+    const conf = await c.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'confirmed');
+    if (conf.value.err) {
+      log('confirmed WITH ERROR: ' + JSON.stringify(conf.value.err));
+      status('bad', 'Transaction landed but returned an error: ' + JSON.stringify(conf.value.err));
+      btn.disabled = false;
+      return;
+    }
+
+    const bal = await c.getTokenAccountBalance(a.quoteWallet).catch(() => null);
+    const sol = await c.getBalance(owner).catch(() => null);
+    log('CONFIRMED ' + sig);
+    status('ok', `Confirmed.<br><span class="addr">${sig}</span>` +
+      (bal ? `<br>${a.quoteSym} wallet now holds <strong>${bal.value.uiAmountString}</strong>.` : '') +
+      (sol !== null ? `<br>SOL balance <strong>${(sol / 1e9).toFixed(9)}</strong>.` : ''));
+    btn.textContent = 'Done ✓';
+  } catch (e) {
+    log('error: ' + e.message);
+    if (e.logs) e.logs.slice(-12).forEach(l => log('  | ' + l));
+    status('bad', 'Failed: ' + e.message);
+    btn.disabled = false;
+  }
+}
+
+// ------------------------------------------------------------------- boot
+const p = detectProviders();
+log(p.length ? 'wallet provider(s) available: ' + p.map(x => x[0]).join(', ')
+             : 'no wallet provider detected — open this page inside your wallet app to sign');
+log('set your RPC in step 1, then connect or inspect an address');
+</script>
+</body>
+</html>

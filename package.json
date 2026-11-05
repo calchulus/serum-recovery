@@ -1,0 +1,18 @@
+{
+  "name": "serum-wallet-adapter",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Static browser tool to find and withdraw funds from Serum v3 open-orders accounts",
+  "scripts": {
+    "bundle": "esbuild core.js --bundle --format=esm --platform=browser --target=es2022 --outfile=vendor/app-core.js",
+    "test": "node test-core.mjs",
+    "serve": "python3 -m http.server 8765"
+  },
+  "devDependencies": {
+    "@project-serum/serum": "0.13.65",
+    "@solana/web3.js": "^1.95.3",
+    "buffer": "^6.0.3",
+    "esbuild": "^0.28.2"
+  }
+}
