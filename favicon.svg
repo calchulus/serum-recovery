@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <title>Serum v3 Open-Orders Recovery</title>
+  <rect width="32" height="32" rx="7" fill="#1f6feb"/>
+  <path d="M16 6.5 23 13.5h-4.4v6.2h-5.2V13.5H9z" fill="#fff"/>
+  <rect x="8.5" y="22.2" width="15" height="3.3" rx="1.65" fill="#fff" opacity=".82"/>
+</svg>
